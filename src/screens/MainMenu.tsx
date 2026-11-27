@@ -10,7 +10,7 @@ type Entry = { label: string; screen: Screen; hint: string; create?: boolean }
 
 export function MainMenu() {
   const { go, createCharacter, edit, characters, campaigns, toast } = useStore()
-  const { session, profile, memberships, refresh } = useOnline()
+  const { session, profile, memberships } = useOnline()
   const [inviteCode, setInviteCode] = useState('')
   const [joining, setJoining] = useState(false)
   const pjs = characters.filter((c) => c.kind === 'pj').length
@@ -44,17 +44,20 @@ export function MainMenu() {
       return
     }
     setJoining(true)
-    const { campaignId, error } = await joinOnlineCampaign(clean)
+    const { campaignId, createdNewCharacter, error } = await joinOnlineCampaign(clean)
     setJoining(false)
     if (error) {
       toast(authError(error), 'danger')
       return
     }
     setInviteCode('')
-    toast('¡Te has unido a la campaña!', 'ok')
-    await refresh()
-    if (campaignId) openCampaignProfile(campaignId)
-    else go('campanas')
+    if (createdNewCharacter) {
+      toast('¡Te has unido a la campaña! Configura tu personaje para participar.', 'ok')
+    } else {
+      toast('¡Te has unido a la campaña!', 'ok')
+      if (campaignId) openCampaignProfile(campaignId)
+      else go('campanas')
+    }
   }
 
   return (

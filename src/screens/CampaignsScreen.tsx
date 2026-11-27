@@ -132,15 +132,18 @@ export function CampaignsScreen() {
     if (!joinCode.trim()) return
     if (!session) return toast('Inicia sesión en Cuenta para unirte con un código online', 'warn')
     setBusy(true)
-    const { campaignId, error } = await joinOnlineCampaign(joinCode)
+    const { campaignId, createdNewCharacter, error } = await joinOnlineCampaign(joinCode)
     setBusy(false)
     if (error) return toast(authError(error), 'danger')
     setJoinCode('')
-    toast('¡Te has unido a la campaña!', 'ok')
-    await refresh()
-    if (campaignId) {
-      setSel(campaignId)
-      setTab('fichas')
+    if (createdNewCharacter) {
+      toast('¡Te has unido a la campaña! Configura tu personaje para participar.', 'ok')
+    } else {
+      toast('¡Te has unido a la campaña!', 'ok')
+      if (campaignId) {
+        setSel(campaignId)
+        setTab('fichas')
+      }
     }
   }
 

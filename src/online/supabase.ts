@@ -317,15 +317,51 @@ export async function createOnlineCampaign(
   return { data: ins.data, error: mem.error }
 }
 
-/** Unirse a una campaña con código de 8 caracteres y devolver el ID de la campaña. */
-export async function joinOnlineCampaign(code: string): Promise<{ campaignId?: string; error: { message?: string } | null }> {
+/** Unirse a una campaña con código de 8 caracteres y crear/abrir automáticamente un personaje para participar. */
+export async function joinOnlineCampaign(
+  code: string
+): Promise<{ campaignId?: string; characterId?: string; createdNewCharacter?: boolean; error: { message?: string } | null }> {
   if (!supabase) return { error: { message: 'Modo online no disponible' } }
   const clean = code.trim().toUpperCase()
   const rpc = await supabase.rpc('join_campaign', { p_code: clean })
-  if (!rpc.error && rpc.data) {
-    return { campaignId: String(rpc.data), error: null }
+  if (rpc.error || !rpc.data) {
+    return { error: rpc.error }
   }
-  return { error: rpc.error }
+
+  const campaignId = String(rpc.data)
+  await useOnline.getState().refresh()
+
+  const store = useStore.getState()
+  const onlineState = useOnline.getState()
+  const uid = onlineState.session?.user.id
+
+  // Comprobar si el usuario ya tenía un personaje creado en esta campaña
+  const existingLocal = store.characters.find((c) => !c.isTemplate && c.campaignId === campaignId)
+  const existingRemote = onlineState.campaignCharacters.find((cc) => cc.campaign_id === campaignId && cc.owner_id === uid)
+
+  if (existingLocal) {
+    onlineState.setActiveCampaignId(campaignId)
+    return { campaignId, characterId: existingLocal.id, createdNewCharacter: false, error: null }
+  }
+
+  if (existingRemote) {
+    store.importCharacter({ ...existingRemote.data, campaignId })
+    onlineState.setActiveCampaignId(campaignId)
+    return { campaignId, characterId: existingRemote.id, createdNewCharacter: false, error: null }
+  }
+
+  // Si no tiene personaje en esta campaña, creamos su nueva ficha para participar y la abrimos en el editor
+  const newChar = store.createCharacter({ campaignId })
+  const camp = store.campaigns.find((c) => c.id === campaignId)
+  if (camp) {
+    store.saveCampaign({ ...camp, characterIds: [...new Set([...camp.characterIds, newChar.id])] })
+  }
+  await syncCharacterToCampaign(newChar, campaignId)
+  await useOnline.getState().refresh()
+  onlineState.setActiveCampaignId(campaignId)
+  store.edit(newChar.id)
+
+  return { campaignId, characterId: newChar.id, createdNewCharacter: true, error: null }
 }
 
 /** Regenera el código de invitación de una campaña con respaldo en cliente si falla pgcrypto. */

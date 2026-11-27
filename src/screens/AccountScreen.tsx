@@ -6,6 +6,7 @@ import {
   canManageRoles,
   canUploadFiles,
   createOnlineCampaign,
+  joinOnlineCampaign,
   openCampaignProfile,
   regenerateOnlineInvite,
   supabase,
@@ -257,7 +258,7 @@ function ProfileAndCampaignsTab({
             <Btn
               disabled={code.trim().length !== 8}
               onClick={async () => {
-                if (await run(supabase!.rpc('join_campaign', { p_code: code }), 'Te has unido como jugador')) setCode('')
+                if (await run(joinOnlineCampaign(code), '¡Te has unido a la campaña! Configura tu personaje para participar.')) setCode('')
               }}
             >
               Unirme
