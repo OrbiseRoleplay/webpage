@@ -1,21 +1,31 @@
-# Modo online (AGENTE 09)
+# Modo online y Base de Datos (Supabase)
 
-## Fase A — cuentas, roles y campañas: programada, pendiente de conectar
+## Qué incluye la base de datos (`supabase/schema.sql`)
 
-Hecho en el código:
-- `supabase/schema.sql`: perfiles, campañas, miembros con rol (`gm` / `player`), administrador (`profiles.is_admin`), enciclopedia con escritura solo para administradores, funciones `create_campaign`, `join_campaign`, `regenerate_invite`, `delete_my_account`. Toda la seguridad con RLS y permisos por columna en el servidor.
-- `src/online/supabase.ts`: cliente y sesión. Sin variables de entorno la app sigue en modo local.
-- `src/screens/AccountScreen.tsx`: iniciar sesión, crear cuenta (con consentimiento RGPD y edad), recuperar contraseña, cambiar nombre, ver roles, crear campaña, unirse con código, copiar/regenerar código (GM), salir de campaña, borrar cuenta.
+1. **Registro de usuarios (`public.profiles`):**
+   - Guarda nombre visible, correo y estado de administrador.
+   - El **primer usuario** que se registra recibe automáticamente el rol de **Admin**.
+2. **Roles dinámicos y permisos (`public.app_roles` y `public.user_roles`):**
+   - Roles base del sistema: **Admin**, **Master** y **Jugador**.
+   - Creación y edición de **roles personalizados** desde la propia web (con color, descripción y permisos granulares: gestionar roles/usuarios, permisos de Master, subir archivos y moderar todos los archivos).
+   - Asignación y retirada de roles a cualquier usuario con un clic desde la pestaña **Usuarios**.
+3. **Subida y compartición de archivos (`public.shared_files`, `file_role_shares`, `file_user_shares` + Storage bucket `orbise-files`):**
+   - Subida de archivos de hasta 50 MB almacenados de forma segura en Supabase Storage.
+   - Compartición flexible al subir o en cualquier momento desde el botón **Permisos**:
+     - **Público** (para todos los usuarios registrados).
+     - **Por Roles** (ej. compartir solo con `Master`, o con un rol personalizado que hayas creado).
+     - **Por Usuarios** (seleccionando usuarios concretos de la lista).
+   - Seguridad real en servidor (RLS en tablas y en `storage.objects`): nadie puede listar ni descargar un archivo si no es su creador, Admin, o está incluido en los usuarios/roles con los que se compartió.
+4. **Campañas (`public.campaigns` y `public.campaign_members`):**
+   - Creación de campañas y unión mediante código de invitación de 8 caracteres.
 
-### Conectarlo (una vez)
-1. Supabase → SQL Editor → pegar `supabase/schema.sql` → Run.
-2. Crear `.env.local` en la raíz (copia de `.env.example`) con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`. **Nunca** la `service_role`.
-3. Supabase → Authentication → URL Configuration → Site URL = dirección donde se abre la app (p. ej. `http://localhost:5173`; más adelante tu dominio).
-4. Registrarte en la app y ejecutar en SQL Editor (con tu correo):
-   `update public.profiles set is_admin = true where id = (select id from auth.users where email = 'TU_CORREO');`
+## Cómo conectarlo en 3 minutos (Supabase + Vercel)
 
-## Fase B — pendiente
-- Personajes en la nube con visibilidad por partes (público / jugador y GM / privado / solo GM) aplicada en el servidor, y campos que solo cambia el GM (clase del Don, aprobación, bonos, vitalidad en ficha aprobada).
-- Tiradas generadas en el servidor (función SQL con `gen_random_bytes`, sin inserción directa del cliente).
-- Tiempo real: barras, tiradas, combate, mensajes y susurros.
-- Inicio de sesión con Google (requiere crear credenciales OAuth en Google Cloud).
+1. Crea un proyecto gratis en [supabase.com](https://supabase.com).
+2. En el menú lateral de Supabase ve a **SQL Editor → New query**, pega todo el contenido de [`supabase/schema.sql`](../supabase/schema.sql) y pulsa **Run**.
+3. Ve a **Project Settings → API** y copia:
+   - `Project URL` → será tu `VITE_SUPABASE_URL`
+   - `anon` `public` key → será tu `VITE_SUPABASE_ANON_KEY`
+4. **En local:** crea un archivo `.env.local` en la raíz del proyecto con esas dos variables (como en `.env.example`).
+5. **En Vercel:** entra en tu proyecto → **Settings → Environment Variables**, añade `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` y haz un **Redeploy**.
+6. En Supabase → **Authentication → URL Configuration**, pon como `Site URL` el enlace de tu web en Vercel (y añade `http://localhost:5173` en *Redirect URLs* si pruebas en local).
