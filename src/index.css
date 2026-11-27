@@ -1,0 +1,112 @@
+@import "tailwindcss";
+@import "@fontsource-variable/unbounded";
+@import "@fontsource/atkinson-hyperlegible/400.css";
+@import "@fontsource/atkinson-hyperlegible/700.css";
+
+@theme {
+  --color-void: #060B14;
+  --color-panel: #101C2D;
+  --color-holo: #5DEEFF;
+  --color-electric: #4285FF;
+  --color-energy: #A56BFF;
+  --color-gold: #FFD66B;
+  --color-doom: #FF3C55;
+  --color-good: #4EE8A0;
+  --color-ink: #E8F7FF;
+  --font-display: "Unbounded Variable", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+}
+
+:root { --fx: 0.8; color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(1200px 700px at 70% -10%, #12284a 0%, transparent 60%),
+              radial-gradient(900px 600px at -10% 110%, #24124a 0%, transparent 55%), var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Logotipo: tipografía ancha con relleno ópalo (cian → violeta → oro), como luz atravesando cristal */
+.orbise-wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(3.2rem, 7.6vw, 8rem);
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+  background: linear-gradient(100deg, #E8F7FF 0%, #5DEEFF 30%, #A56BFF 62%, #FFD66B 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 calc(28px * var(--fx)) rgb(93 238 255 / 0.25));
+}
+
+/* Índice del menú: tipografía grande, sin tarjetas. Un fragmento de cristal marca la entrada activa. */
+.menu-entry {
+  position: relative; display: block; width: 100%; text-align: left;
+  padding: 0.55rem 0 0.55rem 1.6rem; color: var(--color-ink);
+  transition: color .2s, transform .2s;
+}
+.menu-entry:hover, .menu-entry:focus-visible { color: var(--color-holo); transform: translateX(6px); outline: none; }
+.menu-shard {
+  position: absolute; left: 0; top: 1.05rem; width: 0.85rem; height: 0.85rem;
+  clip-path: polygon(50% 0, 100% 45%, 50% 100%, 0 45%);
+  background: linear-gradient(160deg, #E8F7FF, #5DEEFF 45%, #A56BFF);
+  opacity: 0; transform: scale(0.4) rotate(-30deg); transition: opacity .2s, transform .25s;
+}
+.menu-entry:hover .menu-shard, .menu-entry:focus-visible .menu-shard { opacity: 1; transform: none; }
+.menu-entry--primary { color: var(--color-gold); }
+.menu-entry--primary .menu-shard { opacity: 1; transform: none; background: linear-gradient(160deg, #FFF3C8, #FFD66B 50%, #FF9E5D); }
+.menu-entry--primary:hover { color: #FFE7A3; }
+
+/* Panel holográfico (glassmorphism + borde luminoso) */
+.holo-panel {
+  position: relative;
+  background: linear-gradient(160deg, rgb(16 28 45 / 0.78), rgb(10 18 32 / 0.62));
+  border: 1px solid rgb(93 238 255 / 0.22);
+  border-radius: 14px;
+  box-shadow: 0 0 calc(24px * var(--fx)) rgb(93 238 255 / calc(0.08 * var(--fx))), inset 0 1px 0 rgb(255 255 255 / 0.05);
+  backdrop-filter: blur(10px);
+}
+.holo-panel::before { /* reflejo iridiscente */
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(115deg, transparent 30%, rgb(93 238 255 / calc(0.06 * var(--fx))) 45%, rgb(165 107 255 / calc(0.05 * var(--fx))) 55%, transparent 70%);
+}
+.scanlines::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: repeating-linear-gradient(0deg, rgb(93 238 255 / calc(0.035 * var(--fx))) 0 1px, transparent 1px 3px);
+}
+
+.holo-input {
+  width: 100%;
+  background: rgb(6 11 20 / 0.7);
+  border: 1px solid rgb(93 238 255 / 0.2);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  color: var(--color-ink);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.holo-input:focus { border-color: var(--color-holo); box-shadow: 0 0 0 3px rgb(93 238 255 / 0.15); }
+textarea.holo-input { min-height: 6rem; resize: vertical; }
+select.holo-input option { background: #101C2D; }
+
+.text-glow { text-shadow: 0 0 calc(12px * var(--fx)) rgb(93 238 255 / 0.55); }
+.text-gold-glow { text-shadow: 0 0 calc(16px * var(--fx)) rgb(255 214 107 / 0.7); }
+.text-doom-glow { text-shadow: 0 0 calc(16px * var(--fx)) rgb(255 60 85 / 0.7); }
+
+@keyframes scan { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
+.scan-sweep { position: absolute; inset: 0; overflow: hidden; pointer-events: none; border-radius: inherit; }
+.scan-sweep::after { content: ""; position: absolute; left: 0; right: 0; height: 40%;
+  background: linear-gradient(180deg, transparent, rgb(93 238 255 / 0.25), transparent); animation: scan 2.6s linear infinite; }
+
+@keyframes glitch { 0%,100% { transform: none; filter: none; } 20% { transform: translate(-2px,1px); filter: hue-rotate(40deg); } 40% { transform: translate(2px,-1px); } 60% { transform: translate(-1px,0); filter: saturate(2); } }
+.glitch { animation: glitch .35s steps(2) 2; }
+
+.no-motion *, .no-motion *::before, .no-motion *::after { animation-duration: 0.001s !important; animation-iteration-count: 1 !important; transition-duration: 0.001s !important; }
+@media (prefers-reduced-motion: reduce) { .scan-sweep::after { animation: none; } }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgb(93 238 255 / 0.25); border-radius: 8px; }
+:focus-visible { outline: 2px solid var(--color-holo); outline-offset: 2px; }
