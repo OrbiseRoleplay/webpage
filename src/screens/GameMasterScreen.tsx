@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { RULES, type DieSides } from '../rules/config'
 import { displayName, newCharacter, now, uid } from '../domain/character'
 import { OUTCOME_TEXT, roll, type RollResult } from '../domain/dice'
+import { canUseGmTools, useOnline } from '../online/supabase'
 import { useStore } from '../store/useStore'
 import { Btn, Empty, Panel } from '../ui/kit'
 import { CharacterGM } from './gm/CharacterGM'
@@ -9,6 +10,8 @@ import { Narration } from './gm/Narration'
 
 export function GameMasterScreen() {
   const { gmMode, setGm, characters, createCharacter, importCharacter, undoLast, addRoll, go } = useStore()
+  const { session, profile, roles, userRoles, memberships } = useOnline()
+  const hasOnlineGmRole = canUseGmTools(profile, roles, userRoles, memberships)
   const [sel, setSel] = useState<string | null>(null)
   const [sides, setSides] = useState<DieSides>(RULES.defaultDie)
   const [secret, setSecret] = useState<RollResult | null>(null)
@@ -29,13 +32,21 @@ export function GameMasterScreen() {
   return (
     <div className="space-y-4">
       <Panel title="Modo Game Master">
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={gmMode} onChange={(e) => setGm(e.target.checked)} /> Activar modo GM
-        </label>
-        <p className="mt-2 rounded border border-gold/40 bg-gold/10 p-2 text-xs text-gold">
-          Aviso: en modo local este interruptor NO es una medida de seguridad. Cualquiera con acceso a este dispositivo puede activarlo.
-          La verificación real de permisos será en servidor cuando exista el modo online.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={gmMode} onChange={(e) => setGm(e.target.checked)} /> Activar modo GM
+          </label>
+          {session && (
+            <span className={`rounded border px-2 py-0.5 text-xs ${hasOnlineGmRole ? 'border-good/50 bg-good/10 text-good' : 'border-white/15 text-ink/60'}`}>
+              {hasOnlineGmRole ? `✓ Permiso online verificado (${profile?.display_name})` : 'Rol online: Jugador'}
+            </span>
+          )}
+        </div>
+        {!session && (
+          <p className="mt-2 rounded border border-gold/40 bg-gold/10 p-2 text-xs text-gold">
+            Modo sin cuenta: este interruptor activa las herramientas de GM en este dispositivo. Inicia sesión en Cuenta para usar permisos online (Admin / Master).
+          </p>
+        )}
       </Panel>
 
       {gmMode && (
@@ -53,8 +64,7 @@ export function GameMasterScreen() {
               </select>
               <Btn tone="energy" onClick={() => { const r = roll(sides, 'Secreta (GM)', true); addRoll(r); setSecret(r) }}>Tirar en secreto</Btn>
               {secret && <span>D{secret.sides}: <b className="font-display text-lg">{secret.value}</b> {secret.outcome !== 'ordinario' && <span className={secret.outcome === 'catastrofico' ? 'text-doom' : 'text-gold'}>{OUTCOME_TEXT[secret.outcome]}</span>}</span>}
-              <Btn tone="ghost" disabled title="Requiere modo online (no configurado)">Mensajes / susurros</Btn>
-              <span className="text-xs text-ink/50">Requiere modo online (no configurado).</span>
+              <Btn tone="holo" onClick={() => go('cuenta')}>Compartir archivos / Roles</Btn>
             </div>
           </Panel>
 

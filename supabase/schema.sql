@@ -339,18 +339,18 @@ begin
   end if;
 end $$;
 
--- Código de invitación: 8 caracteres sin ambigüedades (sin 0/O, 1/I)
+-- Código de invitación: 8 caracteres sin ambigüedades (sin 0/O, 1/I), sin depender de pgcrypto en search_path
 create or replace function public.new_invite_code() returns text
 language plpgsql volatile set search_path = public as $$
 declare
   alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   code text;
-  b bytea;
 begin
   loop
-    b := gen_random_bytes(8);
     code := '';
-    for i in 0..7 loop code := code || substr(alphabet, (get_byte(b, i) % 32) + 1, 1); end loop;
+    for i in 1..8 loop
+      code := code || substr(alphabet, floor(random() * 32)::int + 1, 1);
+    end loop;
     exit when not exists (select 1 from campaigns where invite_code = code);
   end loop;
   return code;
@@ -435,28 +435,40 @@ create policy "perfil: editar el propio" on public.profiles for update to authen
 drop policy if exists "roles: lectura autenticada" on public.app_roles;
 create policy "roles: lectura autenticada" on public.app_roles for select to authenticated
   using (true);
+drop policy if exists "roles: admin gestiona" on public.app_roles;
+create policy "roles: admin gestiona" on public.app_roles for all to authenticated
+  using (is_admin()) with check (is_admin());
 
 drop policy if exists "user_roles: lectura autenticada" on public.user_roles;
 create policy "user_roles: lectura autenticada" on public.user_roles for select to authenticated
   using (true);
+drop policy if exists "user_roles: admin gestiona" on public.user_roles;
+create policy "user_roles: admin gestiona" on public.user_roles for all to authenticated
+  using (is_admin()) with check (is_admin());
 
 -- Políticas de campañas
 drop policy if exists "campaña: ver si eres miembro" on public.campaigns;
 create policy "campaña: ver si eres miembro" on public.campaigns for select to authenticated
-  using (is_member(id) or is_admin());
+  using (created_by = auth.uid() or is_member(id) or is_admin());
+drop policy if exists "campaña: crear propia" on public.campaigns;
+create policy "campaña: crear propia" on public.campaigns for insert to authenticated
+  with check (created_by = auth.uid());
 drop policy if exists "campaña: el GM edita" on public.campaigns;
 create policy "campaña: el GM edita" on public.campaigns for update to authenticated
-  using (is_gm(id)) with check (is_gm(id));
+  using (created_by = auth.uid() or is_gm(id) or is_admin()) with check (created_by = auth.uid() or is_gm(id) or is_admin());
 drop policy if exists "campaña: el GM borra" on public.campaigns;
 create policy "campaña: el GM borra" on public.campaigns for delete to authenticated
-  using (is_gm(id));
+  using (created_by = auth.uid() or is_gm(id) or is_admin());
 
 drop policy if exists "miembros: ver los de tus campañas" on public.campaign_members;
 create policy "miembros: ver los de tus campañas" on public.campaign_members for select to authenticated
-  using (is_member(campaign_id) or is_admin());
+  using (user_id = auth.uid() or is_member(campaign_id) or is_admin());
+drop policy if exists "miembros: unirse o añadir" on public.campaign_members;
+create policy "miembros: unirse o añadir" on public.campaign_members for insert to authenticated
+  with check (user_id = auth.uid() or is_gm(campaign_id) or is_admin());
 drop policy if exists "miembros: salir o expulsar" on public.campaign_members;
 create policy "miembros: salir o expulsar" on public.campaign_members for delete to authenticated
-  using (user_id = auth.uid() or is_gm(campaign_id));
+  using (user_id = auth.uid() or is_gm(campaign_id) or is_admin());
 
 -- Políticas de archivos compartidos
 drop policy if exists "archivos: ver autorizados" on public.shared_files;
@@ -478,10 +490,16 @@ create policy "archivos: borrar propios o admin" on public.shared_files for dele
 drop policy if exists "file_user_shares: ver si lees archivo" on public.file_user_shares;
 create policy "file_user_shares: ver si lees archivo" on public.file_user_shares for select to authenticated
   using (user_id = auth.uid() or can_read_file(file_id));
+drop policy if exists "file_user_shares: gestionar si gestionas archivo" on public.file_user_shares;
+create policy "file_user_shares: gestionar si gestionas archivo" on public.file_user_shares for all to authenticated
+  using (can_manage_file(file_id)) with check (can_manage_file(file_id));
 
 drop policy if exists "file_role_shares: ver si lees archivo" on public.file_role_shares;
 create policy "file_role_shares: ver si lees archivo" on public.file_role_shares for select to authenticated
   using (can_read_file(file_id));
+drop policy if exists "file_role_shares: gestionar si gestionas archivo" on public.file_role_shares;
+create policy "file_role_shares: gestionar si gestionas archivo" on public.file_role_shares for all to authenticated
+  using (can_manage_file(file_id)) with check (can_manage_file(file_id));
 
 -- Políticas de enciclopedia
 drop policy if exists "enciclopedia: lectura pública" on public.encyclopedia_entries;
@@ -528,16 +546,9 @@ create policy "storage: borrar propios o admin" on storage.objects for delete to
   );
 
 -- ───────────── Permisos de tablas y funciones ─────────────
-revoke insert, update, delete on public.profiles from anon, authenticated;
+grant select on public.profiles, public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
 grant update (display_name) on public.profiles to authenticated;
-revoke insert, update, delete on public.app_roles from anon, authenticated;
-revoke insert, update, delete on public.user_roles from anon, authenticated;
-revoke insert, update on public.campaigns from anon, authenticated;
-grant update (name, description, paused) on public.campaigns to authenticated;
-revoke insert, update on public.campaign_members from anon, authenticated;
-revoke insert, update, delete on public.file_user_shares from anon, authenticated;
-revoke insert, update, delete on public.file_role_shares from anon, authenticated;
-grant select, insert, update, delete on public.shared_files to authenticated;
+grant insert, update, delete on public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
 
 revoke execute on function
   public.create_campaign(text, text),

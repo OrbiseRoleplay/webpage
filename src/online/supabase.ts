@@ -2,6 +2,7 @@
 // Configuración: copia .env.example a .env.local y rellena URL y clave anon (nunca la service_role).
 import { createClient, type Session } from '@supabase/supabase-js'
 import { create } from 'zustand'
+import { useStore } from '../store/useStore'
 
 const env = import.meta.env as Record<string, string | undefined>
 const url = env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL || 'https://nkihmftiwhcflpeczixr.supabase.co'
@@ -9,6 +10,15 @@ const key = env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_PUBLISHABLE_KEY || e
 export const supabase = url && key ? createClient(url, key) : null
 
 export const FILES_BUCKET = 'orbise-files'
+
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+/** Genera un código de invitación criptográficamente seguro de 8 caracteres sin ambigüedades. */
+export function generateInviteCode(): string {
+  const bytes = new Uint8Array(8)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('')
+}
 
 export interface Profile {
   id: string
@@ -111,14 +121,24 @@ export const useOnline = create<OnlineState>()((set, get) => ({
       user_ids: userSharesByFile.get(file.id) ?? [],
     }))
 
+    const profile = (p.data as Profile | null) ?? null
+    const roles = (r.data as AppRole[] | null) ?? []
+    const userRoles = (ur.data as UserRoleAssignment[] | null) ?? []
+    const memberships = (m.data as unknown as Membership[] | null) ?? []
+
     set({
-      profile: (p.data as Profile | null) ?? null,
-      memberships: (m.data as unknown as Membership[] | null) ?? [],
-      roles: (r.data as AppRole[] | null) ?? [],
+      profile,
+      memberships,
+      roles,
       users: (u.data as Profile[] | null) ?? [],
-      userRoles: (ur.data as UserRoleAssignment[] | null) ?? [],
+      userRoles,
       files,
     })
+
+    // Si el usuario tiene rol de Admin, Master o es GM de una campaña, activamos automáticamente el modo GM
+    if (canUseGmTools(profile, roles, userRoles, memberships) && !useStore.getState().gmMode) {
+      useStore.getState().setGm(true)
+    }
   },
 }))
 
@@ -138,6 +158,20 @@ export function canManageRoles(profile: Profile | null, roles: AppRole[], userRo
   return roles.some((r) => myRoleIds.has(r.id) && (r.slug === 'admin' || r.can_manage_roles))
 }
 
+/** Comprueba si el usuario tiene permisos de Master / GM. */
+export function canUseGmTools(
+  profile: Profile | null,
+  roles: AppRole[],
+  userRoles: UserRoleAssignment[],
+  memberships: Membership[] = []
+): boolean {
+  if (!profile) return false
+  if (profile.is_admin) return true
+  if (memberships.some((m) => m.role === 'gm')) return true
+  const myRoleIds = new Set(userRoles.filter((ur) => ur.user_id === profile.id).map((ur) => ur.role_id))
+  return roles.some((r) => myRoleIds.has(r.id) && (r.can_gm || r.slug === 'master' || r.slug === 'admin' || r.can_manage_roles))
+}
+
 /** Comprueba si el usuario actual puede subir archivos. */
 export function canUploadFiles(profile: Profile | null, roles: AppRole[], userRoles: UserRoleAssignment[]): boolean {
   if (!profile) return false
@@ -153,6 +187,36 @@ export function canManageAllFiles(profile: Profile | null, roles: AppRole[], use
   if (profile.is_admin) return true
   const myRoleIds = new Set(userRoles.filter((ur) => ur.user_id === profile.id).map((ur) => ur.role_id))
   return roles.some((r) => myRoleIds.has(r.id) && (r.can_manage_all_files || r.slug === 'admin'))
+}
+
+/** Crea una campaña en Supabase con respaldo automático si new_invite_code falla por pgcrypto. */
+export async function createOnlineCampaign(name: string, description = ''): Promise<{ error: { message?: string } | null }> {
+  if (!supabase) return { error: { message: 'Modo online no disponible' } }
+  const rpc = await supabase.rpc('create_campaign', { p_name: name.trim(), p_description: description })
+  if (!rpc.error) return { error: null }
+
+  // Respaldo directo si la función SQL antigua tenía error de gen_random_bytes
+  const uid = useOnline.getState().session?.user.id
+  if (!uid) return { error: rpc.error }
+  const code = generateInviteCode()
+  const ins = await supabase
+    .from('campaigns')
+    .insert({ name: name.trim(), description, invite_code: code, created_by: uid })
+    .select('id')
+    .single()
+  if (ins.error || !ins.data) return { error: ins.error ?? rpc.error }
+  const mem = await supabase.from('campaign_members').insert({ campaign_id: ins.data.id, user_id: uid, role: 'gm' })
+  return { error: mem.error }
+}
+
+/** Regenera el código de invitación de una campaña con respaldo en cliente si falla pgcrypto. */
+export async function regenerateOnlineInvite(campaignId: string): Promise<{ error: { message?: string } | null }> {
+  if (!supabase) return { error: { message: 'Modo online no disponible' } }
+  const rpc = await supabase.rpc('regenerate_invite', { p_campaign: campaignId })
+  if (!rpc.error) return { error: null }
+  const code = generateInviteCode()
+  const upd = await supabase.from('campaigns').update({ invite_code: code }).eq('id', campaignId)
+  return { error: upd.error ?? rpc.error }
 }
 
 /** Traduce los errores habituales de Supabase a mensajes claros. */

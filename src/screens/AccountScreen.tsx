@@ -5,6 +5,8 @@ import {
   canManageAllFiles,
   canManageRoles,
   canUploadFiles,
+  createOnlineCampaign,
+  regenerateOnlineInvite,
   supabase,
   useOnline,
   type AppRole,
@@ -268,7 +270,7 @@ function ProfileAndCampaignsTab({
               tone="energy"
               disabled={!campaignName.trim()}
               onClick={async () => {
-                if (await run(supabase!.rpc('create_campaign', { p_name: campaignName }), 'Campaña creada')) setCampaignName('')
+                if (await run(createOnlineCampaign(campaignName), 'Campaña creada')) setCampaignName('')
               }}
             >
               Crear
@@ -307,7 +309,7 @@ function CampaignRow({
         <>
           <span className="font-mono tracking-widest text-gold">{m.campaign.invite_code}</span>
           <Btn tone="ghost" onClick={() => navigator.clipboard.writeText(m.campaign.invite_code).then(() => toast('Código copiado', 'ok'))}>Copiar</Btn>
-          <Btn tone="ghost" onClick={() => confirmAction('¿Generar un código nuevo? El actual dejará de funcionar.') && run(supabase!.rpc('regenerate_invite', { p_campaign: m.campaign.id }), 'Código nuevo generado')}>Nuevo código</Btn>
+          <Btn tone="ghost" onClick={() => confirmAction('¿Generar un código nuevo? El actual dejará de funcionar.') && run(regenerateOnlineInvite(m.campaign.id), 'Código nuevo generado')}>Nuevo código</Btn>
         </>
       )}
       {!gm && (

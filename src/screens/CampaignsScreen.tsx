@@ -3,6 +3,7 @@ import { displayName, now, uid } from '../domain/character'
 import { randomInt } from '../domain/dice'
 import type { Campaign, Visibility } from '../domain/schema'
 import { importImage, pickFiles } from '../io/images'
+import { createOnlineCampaign, supabase, useOnline } from '../online/supabase'
 import { useStore } from '../store/useStore'
 import { Btn, Empty, Field, Panel, Tabs, Text, confirmAction } from '../ui/kit'
 import { Missions } from './gm/Missions'
@@ -14,14 +15,19 @@ type Tab = 'general' | 'misiones' | 'diario' | 'escenarios'
 
 export function CampaignsScreen() {
   const { campaigns, characters, saveCampaign, deleteCampaign, saveCharacter, gmMode, toast } = useStore()
+  const { session, memberships, refresh } = useOnline()
   const [sel, setSel] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('general')
   const camp = campaigns.find((c) => c.id === sel)
   const upd = (p: Partial<Campaign>) => camp && saveCampaign({ ...camp, ...p })
 
-  const create = () => {
+  const create = async () => {
     const c: Campaign = { id: uid(), name: 'Nueva campaña', description: '', inviteCode: inviteCode(), createdAt: now(), characterIds: [], missions: [], journal: [], scenarios: [], paused: false }
     saveCampaign(c); setSel(c.id); setTab('general')
+    if (supabase && session) {
+      await createOnlineCampaign(c.name, c.description)
+      await refresh()
+    }
   }
   const assign = (id: string, on: boolean) => {
     if (!camp) return
@@ -59,7 +65,11 @@ export function CampaignsScreen() {
                   Código de invitación: <b className="font-display tracking-[0.3em] text-gold">{camp.inviteCode}</b>
                   <Btn tone="ghost" onClick={() => upd({ inviteCode: inviteCode() })}>Regenerar</Btn>
                 </div>
-                <p className="text-xs text-ink/50">Unirse con este código desde otro dispositivo requiere modo online (no configurado). Por ahora es solo un identificador local.</p>
+                <p className="text-xs text-ink/50">
+                  {session
+                    ? `Conectado al modo online (${memberships.length} campaña(s) en tu cuenta). Puedes compartir códigos de invitación desde la sección Cuenta.`
+                    : 'Inicia sesión en Cuenta para sincronizar campañas online con otros jugadores.'}
+                </p>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={camp.paused} onChange={(e) => upd({ paused: e.target.checked })} /> Sesión pausada</label>
                 <div>
                   <div className="mb-1 text-xs tracking-wider text-holo/70 uppercase">Personajes de la campaña</div>
