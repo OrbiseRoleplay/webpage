@@ -2,6 +2,8 @@
 // Configuración: copia .env.example a .env.local y rellena URL y clave anon (nunca la service_role).
 import { createClient, type Session } from '@supabase/supabase-js'
 import { create } from 'zustand'
+import type { Character } from '../domain/schema'
+import { displayName } from '../domain/character'
 import { useStore } from '../store/useStore'
 
 const env = import.meta.env as Record<string, string | undefined>
@@ -66,6 +68,38 @@ export interface Membership {
   campaign: { id: string; name: string; description: string; invite_code: string; paused: boolean }
 }
 
+export interface CampaignParticipant {
+  campaign_id: string
+  user_id: string
+  role: 'gm' | 'player'
+  joined_at: string
+}
+
+export interface CampaignRole {
+  id: string
+  campaign_id: string
+  name: string
+  color: string
+  description: string
+  can_edit_campaign: boolean
+  can_manage_characters: boolean
+}
+
+export interface CampaignMemberRole {
+  campaign_id: string
+  user_id: string
+  role_id: string
+}
+
+export interface CampaignCharacterRecord {
+  id: string
+  campaign_id: string
+  owner_id: string
+  name: string
+  data: Character
+  updated_at: string
+}
+
 interface OnlineState {
   session: Session | null
   profile: Profile | null
@@ -74,6 +108,12 @@ interface OnlineState {
   users: Profile[]
   userRoles: UserRoleAssignment[]
   files: SharedFileRecord[]
+  campaignParticipants: CampaignParticipant[]
+  campaignRoles: CampaignRole[]
+  campaignMemberRoles: CampaignMemberRole[]
+  campaignCharacters: CampaignCharacterRecord[]
+  activeCampaignId: string | null
+  setActiveCampaignId: (id: string | null) => void
   refresh: () => Promise<void>
 }
 
@@ -85,12 +125,29 @@ export const useOnline = create<OnlineState>()((set, get) => ({
   users: [],
   userRoles: [],
   files: [],
+  campaignParticipants: [],
+  campaignRoles: [],
+  campaignMemberRoles: [],
+  campaignCharacters: [],
+  activeCampaignId: null,
+  setActiveCampaignId: (activeCampaignId) => set({ activeCampaignId }),
   refresh: async () => {
     const uid = get().session?.user.id
     if (!supabase || !uid) {
-      return set({ profile: null, memberships: [], roles: [], users: [], userRoles: [], files: [] })
+      return set({
+        profile: null,
+        memberships: [],
+        roles: [],
+        users: [],
+        userRoles: [],
+        files: [],
+        campaignParticipants: [],
+        campaignRoles: [],
+        campaignMemberRoles: [],
+        campaignCharacters: [],
+      })
     }
-    const [p, m, r, u, ur, f, frs, fus] = await Promise.all([
+    const [p, m, r, u, ur, f, frs, fus, cp, cr, cmr, cc] = await Promise.all([
       supabase.from('profiles').select('id, display_name, email, is_admin, created_at').eq('id', uid).single(),
       supabase.from('campaign_members').select('role, campaign:campaigns(id, name, description, invite_code, paused)').eq('user_id', uid),
       supabase.from('app_roles').select('*').order('is_system', { ascending: false }).order('name'),
@@ -99,6 +156,10 @@ export const useOnline = create<OnlineState>()((set, get) => ({
       supabase.from('shared_files').select('*').order('created_at', { ascending: false }),
       supabase.from('file_role_shares').select('file_id, role_id'),
       supabase.from('file_user_shares').select('file_id, user_id'),
+      supabase.from('campaign_members').select('campaign_id, user_id, role, joined_at'),
+      supabase.from('campaign_roles').select('*').order('name'),
+      supabase.from('campaign_member_roles').select('campaign_id, user_id, role_id'),
+      supabase.from('campaign_characters').select('*').order('updated_at', { ascending: false }),
     ])
 
     const roleSharesByFile = new Map<string, string[]>()
@@ -124,7 +185,8 @@ export const useOnline = create<OnlineState>()((set, get) => ({
     const profile = (p.data as Profile | null) ?? null
     const roles = (r.data as AppRole[] | null) ?? []
     const userRoles = (ur.data as UserRoleAssignment[] | null) ?? []
-    const memberships = (m.data as unknown as Membership[] | null) ?? []
+    const memberships = ((m.data as unknown as Membership[] | null) ?? []).filter((x) => x.campaign)
+    const campaignCharacters = (cc.data as CampaignCharacterRecord[] | null) ?? []
 
     set({
       profile,
@@ -133,7 +195,47 @@ export const useOnline = create<OnlineState>()((set, get) => ({
       users: (u.data as Profile[] | null) ?? [],
       userRoles,
       files,
+      campaignParticipants: (cp.data as CampaignParticipant[] | null) ?? [],
+      campaignRoles: (cr.data as CampaignRole[] | null) ?? [],
+      campaignMemberRoles: (cmr.data as CampaignMemberRole[] | null) ?? [],
+      campaignCharacters,
     })
+
+    // Sincronizar campañas online hacia el store local para que tengan su perfil completo en Campañas
+    const store = useStore.getState()
+    for (const mem of memberships) {
+      const existing = store.campaigns.find((c) => c.id === mem.campaign.id)
+      const campCharIds = campaignCharacters
+        .filter((ch) => ch.campaign_id === mem.campaign.id)
+        .map((ch) => ch.id)
+      if (!existing) {
+        store.saveCampaign({
+          id: mem.campaign.id,
+          name: mem.campaign.name,
+          description: mem.campaign.description ?? '',
+          inviteCode: mem.campaign.invite_code,
+          createdAt: new Date().toISOString(),
+          characterIds: campCharIds,
+          missions: [],
+          journal: [],
+          scenarios: [],
+          paused: mem.campaign.paused,
+        })
+      } else if (
+        existing.name !== mem.campaign.name ||
+        existing.inviteCode !== mem.campaign.invite_code ||
+        existing.paused !== mem.campaign.paused
+      ) {
+        store.saveCampaign({
+          ...existing,
+          name: mem.campaign.name,
+          description: mem.campaign.description || existing.description,
+          inviteCode: mem.campaign.invite_code,
+          paused: mem.campaign.paused,
+          characterIds: [...new Set([...existing.characterIds, ...campCharIds])],
+        })
+      }
+    }
 
     // Si el usuario tiene rol de Admin, Master o es GM de una campaña, activamos automáticamente el modo GM
     if (canUseGmTools(profile, roles, userRoles, memberships) && !useStore.getState().gmMode) {
@@ -190,10 +292,16 @@ export function canManageAllFiles(profile: Profile | null, roles: AppRole[], use
 }
 
 /** Crea una campaña en Supabase con respaldo automático si new_invite_code falla por pgcrypto. */
-export async function createOnlineCampaign(name: string, description = ''): Promise<{ error: { message?: string } | null }> {
+export async function createOnlineCampaign(
+  name: string,
+  description = ''
+): Promise<{ data?: { id: string; invite_code: string }; error: { message?: string } | null }> {
   if (!supabase) return { error: { message: 'Modo online no disponible' } }
   const rpc = await supabase.rpc('create_campaign', { p_name: name.trim(), p_description: description })
-  if (!rpc.error) return { error: null }
+  if (!rpc.error && rpc.data) {
+    const c = rpc.data as { id: string; invite_code: string }
+    return { data: c, error: null }
+  }
 
   // Respaldo directo si la función SQL antigua tenía error de gen_random_bytes
   const uid = useOnline.getState().session?.user.id
@@ -202,11 +310,22 @@ export async function createOnlineCampaign(name: string, description = ''): Prom
   const ins = await supabase
     .from('campaigns')
     .insert({ name: name.trim(), description, invite_code: code, created_by: uid })
-    .select('id')
+    .select('id, invite_code')
     .single()
   if (ins.error || !ins.data) return { error: ins.error ?? rpc.error }
   const mem = await supabase.from('campaign_members').insert({ campaign_id: ins.data.id, user_id: uid, role: 'gm' })
-  return { error: mem.error }
+  return { data: ins.data, error: mem.error }
+}
+
+/** Unirse a una campaña con código de 8 caracteres y devolver el ID de la campaña. */
+export async function joinOnlineCampaign(code: string): Promise<{ campaignId?: string; error: { message?: string } | null }> {
+  if (!supabase) return { error: { message: 'Modo online no disponible' } }
+  const clean = code.trim().toUpperCase()
+  const rpc = await supabase.rpc('join_campaign', { p_code: clean })
+  if (!rpc.error && rpc.data) {
+    return { campaignId: String(rpc.data), error: null }
+  }
+  return { error: rpc.error }
 }
 
 /** Regenera el código de invitación de una campaña con respaldo en cliente si falla pgcrypto. */
@@ -217,6 +336,34 @@ export async function regenerateOnlineInvite(campaignId: string): Promise<{ erro
   const code = generateInviteCode()
   const upd = await supabase.from('campaigns').update({ invite_code: code }).eq('id', campaignId)
   return { error: upd.error ?? rpc.error }
+}
+
+/** Sube o actualiza una ficha dentro del perfil online de una campaña. */
+export async function syncCharacterToCampaign(character: Character, campaignId: string): Promise<{ error: { message?: string } | null }> {
+  const uid = useOnline.getState().session?.user.id
+  if (!supabase || !uid) return { error: null }
+  const { error } = await supabase.from('campaign_characters').upsert({
+    id: character.id,
+    campaign_id: campaignId,
+    owner_id: uid,
+    name: displayName(character),
+    data: character,
+    updated_at: new Date().toISOString(),
+  })
+  return { error }
+}
+
+/** Quita una ficha del perfil online de una campaña. */
+export async function removeCharacterFromCampaign(characterId: string, campaignId: string): Promise<{ error: { message?: string } | null }> {
+  if (!supabase) return { error: null }
+  const { error } = await supabase.from('campaign_characters').delete().eq('id', characterId).eq('campaign_id', campaignId)
+  return { error }
+}
+
+/** Abre directamente el perfil de una campaña en la pantalla Campañas. */
+export function openCampaignProfile(campaignId: string) {
+  useOnline.getState().setActiveCampaignId(campaignId)
+  useStore.getState().go('campanas')
 }
 
 /** Traduce los errores habituales de Supabase a mensajes claros. */

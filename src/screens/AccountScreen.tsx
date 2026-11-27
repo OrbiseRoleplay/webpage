@@ -6,6 +6,7 @@ import {
   canManageRoles,
   canUploadFiles,
   createOnlineCampaign,
+  openCampaignProfile,
   regenerateOnlineInvite,
   supabase,
   useOnline,
@@ -302,9 +303,17 @@ function CampaignRow({
   return (
     <li className="flex flex-wrap items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate">{m.campaign.name}{m.campaign.paused && <span className="ml-2 text-xs text-gold">En pausa</span>}</p>
+        <button
+          type="button"
+          onClick={() => openCampaignProfile(m.campaign.id)}
+          className="truncate font-medium text-left text-holo hover:underline"
+        >
+          {m.campaign.name}
+        </button>
+        {m.campaign.paused && <span className="ml-2 text-xs text-gold">En pausa</span>}
         <p className={`text-xs ${gm ? 'text-energy' : 'text-holo'}`}>{ROLE_LABEL[m.role]}</p>
       </div>
+      <Btn tone="holo" onClick={() => openCampaignProfile(m.campaign.id)}>Abrir perfil de campaña</Btn>
       {gm && (
         <>
           <span className="font-mono tracking-widest text-gold">{m.campaign.invite_code}</span>

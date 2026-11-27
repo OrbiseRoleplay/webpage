@@ -114,16 +114,19 @@ cross join public.app_roles r
 where p.is_admin = true and r.slug = 'admin'
 on conflict do nothing;
 
--- ───────────── Campañas y miembros ─────────────
+-- ───────────── Campañas, roles de campaña, miembros y fichas ─────────────
 create table if not exists public.campaigns (
   id uuid primary key default gen_random_uuid(),
   name text not null check (char_length(name) between 1 and 80),
   description text not null default '',
   invite_code text not null unique,
   paused boolean not null default false,
+  data jsonb not null default '{}'::jsonb,
   created_by uuid not null references public.profiles on delete cascade,
   created_at timestamptz not null default now()
 );
+
+alter table public.campaigns add column if not exists data jsonb not null default '{}'::jsonb;
 
 create table if not exists public.campaign_members (
   campaign_id uuid not null references public.campaigns on delete cascade,
@@ -131,6 +134,36 @@ create table if not exists public.campaign_members (
   role text not null check (role in ('gm', 'player')),
   joined_at timestamptz not null default now(),
   primary key (campaign_id, user_id)
+);
+
+-- Roles personalizados dentro de cada campaña (creados por el Master de la campaña)
+create table if not exists public.campaign_roles (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid not null references public.campaigns on delete cascade,
+  name text not null check (char_length(name) between 1 and 40),
+  color text not null default '#5DEEFF',
+  description text not null default '',
+  can_edit_campaign boolean not null default false,
+  can_manage_characters boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.campaign_member_roles (
+  campaign_id uuid not null references public.campaigns on delete cascade,
+  user_id uuid not null references public.profiles on delete cascade,
+  role_id uuid not null references public.campaign_roles on delete cascade,
+  assigned_at timestamptz not null default now(),
+  primary key (campaign_id, user_id, role_id)
+);
+
+-- Fichas de personaje vinculadas al perfil de una campaña
+create table if not exists public.campaign_characters (
+  id uuid primary key,
+  campaign_id uuid not null references public.campaigns on delete cascade,
+  owner_id uuid not null references public.profiles on delete cascade,
+  name text not null default 'Sin nombre',
+  data jsonb not null,
+  updated_at timestamptz not null default now()
 );
 
 -- ───────────── Archivos compartidos (por usuarios, por roles o públicos) ─────────────
@@ -417,6 +450,9 @@ alter table public.app_roles enable row level security;
 alter table public.user_roles enable row level security;
 alter table public.campaigns enable row level security;
 alter table public.campaign_members enable row level security;
+alter table public.campaign_roles enable row level security;
+alter table public.campaign_member_roles enable row level security;
+alter table public.campaign_characters enable row level security;
 alter table public.shared_files enable row level security;
 alter table public.file_user_shares enable row level security;
 alter table public.file_role_shares enable row level security;
@@ -469,6 +505,35 @@ create policy "miembros: unirse o añadir" on public.campaign_members for insert
 drop policy if exists "miembros: salir o expulsar" on public.campaign_members;
 create policy "miembros: salir o expulsar" on public.campaign_members for delete to authenticated
   using (user_id = auth.uid() or is_gm(campaign_id) or is_admin());
+
+-- Políticas de roles de campaña y fichas de campaña
+drop policy if exists "campaign_roles: ver si eres miembro" on public.campaign_roles;
+create policy "campaign_roles: ver si eres miembro" on public.campaign_roles for select to authenticated
+  using (is_member(campaign_id) or is_admin());
+drop policy if exists "campaign_roles: el GM gestiona" on public.campaign_roles;
+create policy "campaign_roles: el GM gestiona" on public.campaign_roles for all to authenticated
+  using (is_gm(campaign_id) or is_admin()) with check (is_gm(campaign_id) or is_admin());
+
+drop policy if exists "campaign_member_roles: ver si eres miembro" on public.campaign_member_roles;
+create policy "campaign_member_roles: ver si eres miembro" on public.campaign_member_roles for select to authenticated
+  using (is_member(campaign_id) or is_admin());
+drop policy if exists "campaign_member_roles: el GM gestiona" on public.campaign_member_roles;
+create policy "campaign_member_roles: el GM gestiona" on public.campaign_member_roles for all to authenticated
+  using (is_gm(campaign_id) or is_admin()) with check (is_gm(campaign_id) or is_admin());
+
+drop policy if exists "campaign_characters: ver si eres miembro" on public.campaign_characters;
+create policy "campaign_characters: ver si eres miembro" on public.campaign_characters for select to authenticated
+  using (owner_id = auth.uid() or is_member(campaign_id) or is_admin());
+drop policy if exists "campaign_characters: insertar propia o GM" on public.campaign_characters;
+create policy "campaign_characters: insertar propia o GM" on public.campaign_characters for insert to authenticated
+  with check ((owner_id = auth.uid() and is_member(campaign_id)) or is_gm(campaign_id) or is_admin());
+drop policy if exists "campaign_characters: editar propia o GM" on public.campaign_characters;
+create policy "campaign_characters: editar propia o GM" on public.campaign_characters for update to authenticated
+  using (owner_id = auth.uid() or is_gm(campaign_id) or is_admin())
+  with check (owner_id = auth.uid() or is_gm(campaign_id) or is_admin());
+drop policy if exists "campaign_characters: borrar propia o GM" on public.campaign_characters;
+create policy "campaign_characters: borrar propia o GM" on public.campaign_characters for delete to authenticated
+  using (owner_id = auth.uid() or is_gm(campaign_id) or is_admin());
 
 -- Políticas de archivos compartidos
 drop policy if exists "archivos: ver autorizados" on public.shared_files;
@@ -546,9 +611,9 @@ create policy "storage: borrar propios o admin" on storage.objects for delete to
   );
 
 -- ───────────── Permisos de tablas y funciones ─────────────
-grant select on public.profiles, public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
+grant select on public.profiles, public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.campaign_roles, public.campaign_member_roles, public.campaign_characters, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
 grant update (display_name) on public.profiles to authenticated;
-grant insert, update, delete on public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
+grant insert, update, delete on public.app_roles, public.user_roles, public.campaigns, public.campaign_members, public.campaign_roles, public.campaign_member_roles, public.campaign_characters, public.shared_files, public.file_user_shares, public.file_role_shares, public.encyclopedia_entries to authenticated;
 
 revoke execute on function
   public.create_campaign(text, text),
