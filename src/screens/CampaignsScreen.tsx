@@ -16,6 +16,7 @@ import {
 } from '../online/supabase'
 import { useStore } from '../store/useStore'
 import { Btn, Empty, Field, Panel, Tabs, Text, confirmAction } from '../ui/kit'
+import { CharacterGM } from './gm/CharacterGM'
 import { Missions } from './gm/Missions'
 
 const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
@@ -41,6 +42,7 @@ export function CampaignsScreen() {
 
   const [sel, setSel] = useState<string | null>(activeCampaignId ?? campaigns[0]?.id ?? null)
   const [tab, setTab] = useState<Tab>('fichas')
+  const [gmSelectedCharId, setGmSelectedCharId] = useState<string | null>(null)
   const [joinCode, setJoinCode] = useState('')
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -366,30 +368,69 @@ export function CampaignsScreen() {
                                 ))}
                               </div>
                             )}
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {!isRemoteOnly ? (
-                                <>
-                                  <Btn onClick={() => edit(c.id)}>Abrir ficha</Btn>
-                                  <Btn tone="ghost" onClick={() => assign(c.id, false)}>Quitar de campaña</Btn>
-                                </>
-                              ) : (
+                              <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink/60">
+                                <span>Vit: <strong className="text-gold">{c.current.vitAmarilla}</strong>/<strong className="text-doom">{c.current.vitRoja}</strong></span>
+                                <span>· Res: <strong className="text-holo">{c.current.resistencia}</strong></span>
+                                <span>· <strong className="text-gold">{c.coins} COINS</strong></span>
+                                {c.approved ? <span className="text-good">· ✓ Aprobada</span> : <span className="text-gold/80">· Pendiente</span>}
+                              </div>
+                              {c.conditions.length > 0 && (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {c.conditions.map((cond) => (
+                                    <span key={cond.id} className="rounded border border-doom/50 bg-doom/10 px-1.5 py-0.2 text-[10px] text-doom">
+                                      {cond.kind}: {cond.name}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="mt-2 flex flex-wrap gap-1.5">
                                 <Btn
-                                  tone="holo"
                                   onClick={() => {
-                                    importCharacter({ ...c, campaignId: camp.id })
-                                    toast(`Ficha de ${displayName(c)} guardada en tu dispositivo`, 'ok')
+                                    if (isRemoteOnly) importCharacter({ ...c, campaignId: camp.id })
+                                    edit(c.id)
                                   }}
                                 >
-                                  Abrir / Guardar copia local
+                                  {isCampaignMaster ? 'Ver / Editar ficha' : 'Abrir ficha'}
                                 </Btn>
-                              )}
+                                {isCampaignMaster && (
+                                  <Btn
+                                    tone={gmSelectedCharId === c.id ? 'gold' : 'energy'}
+                                    onClick={() => {
+                                      if (isRemoteOnly) importCharacter({ ...c, campaignId: camp.id })
+                                      setGmSelectedCharId(gmSelectedCharId === c.id ? null : c.id)
+                                    }}
+                                  >
+                                    {gmSelectedCharId === c.id ? 'Cerrar panel Master ▲' : '⚙ Panel Master (Estados / Nivel)'}
+                                  </Btn>
+                                )}
+                                {!isRemoteOnly && (
+                                  <Btn tone="ghost" onClick={() => assign(c.id, false)}>Quitar</Btn>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </article>
-                      )
-                    })}
-                  </div>
-                )}
+                          </article>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {isCampaignMaster && gmSelectedCharId && (() => {
+                    const targetChar =
+                      characters.find((x) => x.id === gmSelectedCharId) ??
+                      campaignSheetList.find((x) => x.char.id === gmSelectedCharId)?.char
+                    if (!targetChar) return null
+                    return (
+                      <div className="rounded-xl border border-energy/50 bg-black/40 p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-display text-xs tracking-wider text-energy uppercase">
+                            Modificando en vivo la ficha de {displayName(targetChar)} (se refleja automáticamente en la ficha del jugador)
+                          </span>
+                          <Btn tone="ghost" onClick={() => setGmSelectedCharId(null)}>Cerrar ✕</Btn>
+                        </div>
+                        <CharacterGM key={targetChar.id} c={targetChar} />
+                      </div>
+                    )
+                  })()}
 
                 {characters.filter((c) => !c.isTemplate).length > 0 && (
                   <div className="rounded-lg border border-white/10 bg-black/20 p-3">

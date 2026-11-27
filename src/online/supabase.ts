@@ -201,10 +201,40 @@ export const useOnline = create<OnlineState>()((set, get) => ({
       campaignCharacters,
     })
 
-    // Sincronizar campañas online hacia el store local para que tengan su perfil completo en Campañas
+    // Sincronizar fichas remotas de campaña con el store local para que cambios del Master o del jugador se reflejen en ambos lados
     const store = useStore.getState()
+    const currentCharacters = [...store.characters]
+    let charsChanged = false
+    for (const remoteChar of campaignCharacters) {
+      if (!remoteChar.data || typeof remoteChar.data !== 'object') continue
+      const incoming: Character = { ...remoteChar.data, id: remoteChar.id, campaignId: remoteChar.campaign_id }
+      const localIdx = currentCharacters.findIndex((c) => c.id === remoteChar.id)
+      const isMine = remoteChar.owner_id === uid
+      const amCampaignGm = memberships.some((m) => m.campaign.id === remoteChar.campaign_id && m.role === 'gm') || Boolean(profile?.is_admin)
+
+      if (localIdx >= 0) {
+        const localChar = currentCharacters[localIdx]
+        const remoteTime = Date.parse(remoteChar.updated_at || incoming.updatedAt || '') || 0
+        const localTime = Date.parse(localChar.updatedAt || '') || 0
+        // Si la versión en la nube es más reciente (p. ej. el Master aplicó un estado o subió el nivel), actualizamos la ficha local
+        if (remoteTime > localTime || JSON.stringify(localChar.conditions) !== JSON.stringify(incoming.conditions) && remoteTime >= localTime) {
+          currentCharacters[localIdx] = incoming
+          charsChanged = true
+        }
+      } else if (isMine || amCampaignGm) {
+        // Si la ficha es mía o soy el Master de su campaña, la cargamos en el store local para poder verla y editarla
+        currentCharacters.unshift(incoming)
+        charsChanged = true
+      }
+    }
+    if (charsChanged) {
+      useStore.setState({ characters: currentCharacters })
+    }
+
+    // Sincronizar campañas online hacia el store local para que tengan su perfil completo en Campañas
+    const currentCampaigns = useStore.getState().campaigns
     for (const mem of memberships) {
-      const existing = store.campaigns.find((c) => c.id === mem.campaign.id)
+      const existing = currentCampaigns.find((c) => c.id === mem.campaign.id)
       const campCharIds = campaignCharacters
         .filter((ch) => ch.campaign_id === mem.campaign.id)
         .map((ch) => ch.id)
@@ -250,6 +280,43 @@ if (supabase) {
     // Fuera del callback: supabase-js recomienda no esperar otras llamadas dentro de él
     setTimeout(() => useOnline.getState().refresh(), 0)
   })
+
+  // Suscripción Realtime: cuando el Master o el jugador modifica una ficha de campaña, se actualiza al instante en ambos lados
+  supabase
+    .channel('orbise-campaign-characters-sync')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'campaign_characters' }, () => {
+      useOnline.getState().refresh()
+    })
+    .subscribe()
+}
+
+/** Sube o actualiza una ficha dentro del perfil online de una campaña (conservando su propietario original si edita el Master). */
+export async function syncCharacterToCampaign(
+  character: Character,
+  campaignId?: string | null,
+  ownerIdOverride?: string
+): Promise<{ error: { message?: string } | null }> {
+  const state = useOnline.getState()
+  const uid = state.session?.user.id
+  if (!supabase || !uid) return { error: null }
+
+  const existingRecord = state.campaignCharacters.find((cc) => cc.id === character.id)
+  const targetCampaignId = campaignId || character.campaignId || existingRecord?.campaign_id
+  if (!targetCampaignId) return { error: null }
+
+  const ownerId = ownerIdOverride || existingRecord?.owner_id || uid
+  const nowIso = new Date().toISOString()
+  const payloadChar: Character = { ...character, campaignId: targetCampaignId, updatedAt: nowIso }
+
+  const { error } = await supabase.from('campaign_characters').upsert({
+    id: character.id,
+    campaign_id: targetCampaignId,
+    owner_id: ownerId,
+    name: displayName(character),
+    data: payloadChar,
+    updated_at: nowIso,
+  })
+  return { error }
 }
 
 /** Comprueba si el usuario actual tiene permiso de administración de roles y usuarios. */
@@ -372,21 +439,6 @@ export async function regenerateOnlineInvite(campaignId: string): Promise<{ erro
   const code = generateInviteCode()
   const upd = await supabase.from('campaigns').update({ invite_code: code }).eq('id', campaignId)
   return { error: upd.error ?? rpc.error }
-}
-
-/** Sube o actualiza una ficha dentro del perfil online de una campaña. */
-export async function syncCharacterToCampaign(character: Character, campaignId: string): Promise<{ error: { message?: string } | null }> {
-  const uid = useOnline.getState().session?.user.id
-  if (!supabase || !uid) return { error: null }
-  const { error } = await supabase.from('campaign_characters').upsert({
-    id: character.id,
-    campaign_id: campaignId,
-    owner_id: uid,
-    name: displayName(character),
-    data: character,
-    updated_at: new Date().toISOString(),
-  })
-  return { error }
 }
 
 /** Quita una ficha del perfil online de una campaña. */

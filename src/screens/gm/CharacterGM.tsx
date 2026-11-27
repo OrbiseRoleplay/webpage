@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { ATTRIBUTES, RULES, type GiftClass } from '../../rules/config'
 import { attrValue, displayName, perPoint, pointsLeft, now, syncVitals, uid } from '../../domain/character'
 import type { Character, Condition, Reward } from '../../domain/schema'
+import { syncCharacterToCampaign, useOnline } from '../../online/supabase'
 import { sfx } from '../../sfx/audio'
 import { useStore } from '../../store/useStore'
 import { Btn, Empty, Field, Num, Panel, Text } from '../../ui/kit'
@@ -18,9 +19,19 @@ function NumC({ value, onCommit }: { value: number; onCommit: (v: number) => voi
 }
 
 export function CharacterGM({ c }: { c: Character }) {
-  const saveCharacter = useStore((s) => s.saveCharacter)
-  const save = (next: Character, msg: string) => saveCharacter(next, `GM: ${msg}`, 'GM')
-  const [cond, setCond] = useState({ kind: 'estado' as Condition['kind'], name: '' })
+  const { saveCharacter, edit, toast } = useStore()
+  const { refresh } = useOnline()
+
+  const persistAndSync = (next: Character, msg?: string) => {
+    saveCharacter(next, msg ? `GM: ${msg}` : undefined, 'GM')
+    syncCharacterToCampaign(next, next.campaignId).then(({ error }) => {
+      if (!error) refresh()
+    })
+  }
+
+  const save = (next: Character, msg: string) => persistAndSync(next, msg)
+
+  const [cond, setCond] = useState({ kind: 'estado' as Condition['kind'], name: '', notes: '' })
   const [coin, setCoin] = useState({ amount: 0, reason: '' })
   const [rw, setRw] = useState({ kind: 'experiencia' as Reward['kind'], amount: 0, description: '', source: 'Game Master' })
   const [flash, setFlash] = useState<Reward | null>(null)
@@ -62,20 +73,104 @@ export function CharacterGM({ c }: { c: Character }) {
         )}
       </AnimatePresence>
 
-      <Panel title={`Ficha · ${displayName(c)}`}>
-        <div className="flex flex-wrap items-end gap-4">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={c.approved} onChange={(e) => save({ ...c, approved: e.target.checked }, e.target.checked ? 'ficha aprobada' : 'aprobación retirada')} /> Ficha aprobada</label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={c.isTemplate} onChange={(e) => save({ ...c, isTemplate: e.target.checked }, e.target.checked ? 'marcada como plantilla' : 'ya no es plantilla')} /> Plantilla reutilizable</label>
+      <Panel
+        title={`Control del Master · ${displayName(c)}`}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Btn tone="holo" onClick={() => edit(c.id)}>Abrir editor completo de ficha</Btn>
+            <Btn
+              tone="ghost"
+              onClick={async () => {
+                await syncCharacterToCampaign(c, c.campaignId)
+                await refresh()
+                toast('Cambios sincronizados con la ficha del participante', 'ok')
+              }}
+            >
+              ↻ Sincronizar ahora
+            </Btn>
+          </div>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Field label="Nivel actual">
+            <div className="flex items-center gap-1.5">
+              <Btn
+                tone="ghost"
+                onClick={() => save({ ...c, identity: { ...c.identity, level: Math.max(0, c.identity.level - 1) } }, `nivel ${Math.max(0, c.identity.level - 1)}`)}
+              >
+                −
+              </Btn>
+              <NumC
+                value={c.identity.level}
+                onCommit={(v) => save({ ...c, identity: { ...c.identity, level: Math.max(0, Math.floor(v)) } }, `nivel = ${v}`)}
+              />
+              <Btn
+                tone="gold"
+                onClick={() => save({ ...c, identity: { ...c.identity, level: c.identity.level + 1 } }, `nivel ${c.identity.level + 1}`)}
+              >
+                +
+              </Btn>
+            </div>
+          </Field>
+
+          <Field label="Experiencia (XP)">
+            <NumC
+              value={c.identity.experience}
+              onCommit={(v) => save({ ...c, identity: { ...c.identity, experience: Math.max(0, Math.floor(v)) } }, `experiencia = ${v}`)}
+            />
+          </Field>
+
           <Field label="Clase de don (solo el GM)">
             <select className="holo-input" value={c.gift.giftClass ?? ''} onChange={(e) => save({ ...c, gift: { ...c.gift, giftClass: (e.target.value || null) as GiftClass | null } }, `clase de don ${e.target.value || 'pendiente'}`)}>
               <option value="">Pendiente</option>
               {RULES.giftClasses.map((g) => <option key={g} value={g}>{g}</option>)}
             </select>
           </Field>
+
+          <div className="flex flex-col justify-end gap-2 pb-1">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={c.approved} onChange={(e) => save({ ...c, approved: e.target.checked }, e.target.checked ? 'ficha aprobada' : 'aprobación retirada')} /> Ficha aprobada</label>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={c.isTemplate} onChange={(e) => save({ ...c, isTemplate: e.target.checked }, e.target.checked ? 'marcada como plantilla' : 'ya no es plantilla')} /> Plantilla reutilizable</label>
+          </div>
         </div>
+
         <Field label="Notas privadas del GM sobre el don" className="mt-3">
-          <Text area value={c.gift.gmNotes} onChange={(v) => saveCharacter({ ...c, gift: { ...c.gift, gmNotes: v } })} />
+          <Text area value={c.gift.gmNotes} onChange={(v) => persistAndSync({ ...c, gift: { ...c.gift, gmNotes: v } })} />
         </Field>
+      </Panel>
+
+      <Panel title="Vitalidad, resistencia y estados (heridas / efectos)">
+        <div className="grid gap-2 sm:grid-cols-3">
+          {(['vitAmarilla', 'vitRoja', 'resistencia'] as const).map((k) => {
+            const max = attrValue(c, k)
+            return (
+              <Field key={k} label={`${ATTRIBUTES.find((a) => a.key === k)!.label} (máx. ${max})`}>
+                <div className="flex items-center gap-1.5">
+                  <NumC value={c.current[k]} onCommit={(v) => save({ ...c, current: { ...c.current, [k]: Math.max(0, Math.min(max, v)) } }, `${k} actual = ${v}`)} />
+                  <Btn tone="ghost" onClick={() => save({ ...c, current: { ...c.current, [k]: max } }, `${k} restaurada al máximo`)}>Máx</Btn>
+                </div>
+              </Field>
+            )
+          })}
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-[150px_1fr_1fr_auto] items-end">
+          <Field label="Tipo de estado"><select className="holo-input" value={cond.kind} onChange={(e) => setCond({ ...cond, kind: e.target.value as Condition['kind'] })}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select></Field>
+          <Field label="Nombre del estado / herida"><Text value={cond.name} onChange={(v) => setCond({ ...cond, name: v })} placeholder="Ej. Quemadura, Bendición, Aturdido…" /></Field>
+          <Field label="Notas / Efecto (opcional)"><Text value={cond.notes} onChange={(v) => setCond({ ...cond, notes: v })} placeholder="Ej. -2 en tiradas físicas" /></Field>
+          <Btn tone="gold" disabled={!cond.name.trim()} onClick={() => { save({ ...c, conditions: [...c.conditions, { id: uid(), kind: cond.kind, name: cond.name.trim(), notes: cond.notes.trim() }] }, `estado ${cond.name}`); setCond({ ...cond, name: '', notes: '' }) }}>+ Aplicar estado</Btn>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {c.conditions.length === 0 && <span className="text-xs text-ink/45">Sin estados ni heridas activas.</span>}
+          {c.conditions.map((k) => (
+            <button
+              key={k.id}
+              title="Clic para quitar este estado de la ficha"
+              className="rounded border border-holo/40 bg-holo/10 px-2.5 py-1 text-xs hover:border-doom hover:text-doom transition"
+              onClick={() => save({ ...c, conditions: c.conditions.filter((x) => x.id !== k.id) }, `estado quitado ${k.name}`)}
+            >
+              <strong className="uppercase">{k.kind}:</strong> {k.name}{k.notes ? ` (${k.notes})` : ''} ✕
+            </button>
+          ))}
+        </div>
       </Panel>
 
       <Panel title="Puntos y atributos">
@@ -98,24 +193,6 @@ export function CharacterGM({ c }: { c: Character }) {
             ))}
           </tbody>
         </table>
-      </Panel>
-
-      <Panel title="Vitalidad, resistencia y estados">
-        <div className="grid gap-2 sm:grid-cols-3">
-          {(['vitAmarilla', 'vitRoja', 'resistencia'] as const).map((k) => (
-            <Field key={k} label={`${ATTRIBUTES.find((a) => a.key === k)!.label} (máx. ${attrValue(c, k)})`}>
-              <NumC value={c.current[k]} onCommit={(v) => save({ ...c, current: { ...c.current, [k]: Math.max(0, Math.min(attrValue(c, k), v)) } }, `${k} actual = ${v}`)} />
-            </Field>
-          ))}
-        </div>
-        <div className="mt-3 flex flex-wrap items-end gap-2">
-          <Field label="Tipo de estado"><select className="holo-input" value={cond.kind} onChange={(e) => setCond({ ...cond, kind: e.target.value as Condition['kind'] })}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select></Field>
-          <Field label="Nombre"><Text value={cond.name} onChange={(v) => setCond({ ...cond, name: v })} /></Field>
-          <Btn disabled={!cond.name.trim()} onClick={() => { save({ ...c, conditions: [...c.conditions, { id: uid(), kind: cond.kind, name: cond.name.trim(), notes: '' }] }, `estado ${cond.name}`); setCond({ ...cond, name: '' }) }}>Añadir</Btn>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          {c.conditions.map((k) => <button key={k.id} title="Quitar" className="rounded border border-white/15 px-2 py-0.5 text-xs hover:border-doom" onClick={() => save({ ...c, conditions: c.conditions.filter((x) => x.id !== k.id) }, `estado quitado ${k.name}`)}>{k.kind}: {k.name} ✕</button>)}
-        </div>
       </Panel>
 
       <Panel title="Inventario y COINS">
